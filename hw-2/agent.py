@@ -1,65 +1,89 @@
-from typing import Literal
-
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import SystemMessage
-from langgraph.graph import StateGraph, MessagesState, END
-from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
+import anthropic
 
 from config import settings, SYSTEM_PROMPT
-from state_store import set_last_text
-from tools import web_search, read_url, write_report
+from tools import web_search, read_url, write_report, TOOLS_SCHEMA
 
+client = anthropic.Anthropic(api_key=settings.api_key.get_secret_value())
 
-# --- LLM ---
-llm = ChatAnthropic(
-    model=settings.model_name,
-    api_key=settings.api_key.get_secret_value(),
-    max_tokens=8192,
-)
-
-tools = [web_search, read_url, write_report]
-llm_with_tools = llm.bind_tools(tools)
+TOOL_FNS = {
+    "web_search": web_search,
+    "read_url": read_url,
+    "write_report": write_report,
+}
 
 
 def _extract_text(content) -> str:
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        return "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in content
-        )
-    return ""
+    parts = []
+    for block in content:
+        if hasattr(block, "text"):
+            parts.append(block.text)
+    return "\n".join(parts)
 
 
-# --- Nodes ---
-def call_model(state: MessagesState) -> dict:
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-    response = llm_with_tools.invoke(messages)
-
-    # Save any text content so write_report can use it
-    text = _extract_text(response.content)
-    if text.strip():
-        set_last_text(text)
-
-    return {"messages": [response]}
+def _fmt_args(args: dict) -> str:
+    parts = []
+    for k, v in args.items():
+        v_str = str(v)
+        if len(v_str) > 80:
+            v_str = v_str[:80] + "..."
+        parts.append(f'{k}="{v_str}"')
+    return ", ".join(parts)
 
 
-def should_continue(state: MessagesState) -> Literal["tools", "__end__"]:
-    last = state["messages"][-1]
-    if hasattr(last, "tool_calls") and last.tool_calls:
-        return "tools"
-    return "__end__"
+def _run_tool(name: str, args: dict) -> str:
+    fn = TOOL_FNS.get(name)
+    if not fn:
+        return f"Error: unknown tool '{name}'"
+    try:
+        return fn(**args)
+    except Exception as e:
+        return f"Tool error: {e}"
 
 
-# --- Graph ---
-graph = StateGraph(MessagesState)
-graph.add_node("agent", call_model)
-graph.add_node("tools", ToolNode(tools, handle_tool_errors=True))
-graph.set_entry_point("agent")
-graph.add_conditional_edges("agent", should_continue)
-graph.add_edge("tools", "agent")
+class ResearchAgent:
+    def __init__(self):
+        self.messages: list = []  # manual conversation memory
 
-memory = MemorySaver()
-agent = graph.compile(checkpointer=memory)
+    def chat(self, user_input: str) -> str:
+        self.messages.append({"role": "user", "content": user_input})
+
+        for _ in range(settings.max_iterations):
+            response = client.messages.create(
+                model=settings.model_name,
+                max_tokens=8192,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS_SCHEMA,
+                messages=self.messages,
+            )
+
+            if response.stop_reason == "end_turn":
+                text = _extract_text(response.content)
+                self.messages.append({"role": "assistant", "content": response.content})
+                return text
+
+            if response.stop_reason == "tool_use":
+                self.messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        print(f"\n🔧 Tool call: {block.name}({_fmt_args(block.input)})")
+                        result = _run_tool(block.name, block.input)
+                        preview = str(result)[:200]
+                        print(f"📎 Result: {preview}")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": str(result),
+                        })
+                self.messages.append({"role": "user", "content": tool_results})
+                continue
+
+            # unexpected stop reason
+            break
+
+        return "Error: max iterations reached without a final response."
+
+
+agent = ResearchAgent()

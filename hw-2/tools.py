@@ -1,16 +1,13 @@
 import os
+
 import trafilatura
 from ddgs import DDGS
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field
 
 from config import settings
-from state_store import get_last_text
 
 
-@tool
 def web_search(query: str) -> str:
-    """Search the web using DuckDuckGo. Returns a list of results with title, URL, and snippet."""
+    """Search the web using DuckDuckGo. Returns title, URL, and snippet for each result."""
     try:
         results = DDGS().text(query, max_results=settings.max_search_results)
         if not results:
@@ -26,7 +23,6 @@ def web_search(query: str) -> str:
         return f"Search error: {e}"
 
 
-@tool
 def read_url(url: str) -> str:
     """Fetch and extract the main text content from a URL. Returns up to 5000 characters."""
     try:
@@ -41,17 +37,9 @@ def read_url(url: str) -> str:
         return f"Error reading URL {url}: {e}"
 
 
-class WriteReportInput(BaseModel):
-    filename: str = Field(description="Filename for the report, e.g. 'rag_comparison.md'")
-
-
-@tool("write_report", args_schema=WriteReportInput)
-def write_report(filename: str) -> str:
-    """Save the research report you just wrote to a file. Call this after writing the complete report in your response."""
+def write_report(filename: str, content: str) -> str:
+    """Save the research report to a Markdown file."""
     try:
-        content = get_last_text()
-        if not content:
-            return "Error: No report text found. Write the complete report in your response first, then call this tool."
         filename = str(filename).strip().replace("/", "_").replace("\\", "_")
         if not filename.endswith(".md"):
             filename += ".md"
@@ -63,3 +51,47 @@ def write_report(filename: str) -> str:
         return f"Report saved to {path}"
     except Exception as e:
         return f"Error saving report: {e}"
+
+
+TOOLS_SCHEMA = [
+    {
+        "name": "web_search",
+        "description": "Search the web using DuckDuckGo. Returns a list of results with title, URL, and snippet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query string"}
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "read_url",
+        "description": "Fetch and extract the main text content from a URL. Returns up to 5000 characters.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Full URL to fetch"}
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "write_report",
+        "description": "Save the research report to a Markdown file.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "Filename for the report, e.g. 'rag_comparison.md'",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Full Markdown content of the report",
+                },
+            },
+            "required": ["filename", "content"],
+        },
+    },
+]
