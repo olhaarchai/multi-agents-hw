@@ -5,6 +5,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from config import settings
+from retriever import get_retriever
 from state_store import get_last_text
 
 
@@ -63,3 +64,22 @@ def write_report(filename: str) -> str:
         return f"Report saved to {path}"
     except Exception as e:
         return f"Error saving report: {e}"
+
+
+@tool
+def knowledge_search(query: str) -> str:
+    """Search the local knowledge base. Use for questions about RAG, LLMs, LangChain, or other ingested documents."""
+    try:
+        retriever = get_retriever()
+        docs = retriever.invoke(query)
+        if not docs:
+            return "No results found in knowledge base."
+        lines = []
+        for i, doc in enumerate(docs, 1):
+            source = doc.metadata.get("source", "unknown")
+            page = doc.metadata.get("page", "")
+            label = f"{os.path.basename(source)}, p.{page}" if page != "" else os.path.basename(source)
+            lines.append(f"{i}. [{label}]\n   {doc.page_content[:300]}")
+        return "\n\n".join(lines)
+    except Exception as e:
+        return f"Knowledge search error: {e}"

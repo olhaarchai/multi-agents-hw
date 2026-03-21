@@ -8,7 +8,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from config import settings, SYSTEM_PROMPT
 from state_store import set_last_text
-from tools import web_search, read_url, write_report
+from tools import web_search, read_url, write_report, knowledge_search
 
 
 # --- LLM ---
@@ -18,7 +18,7 @@ llm = ChatAnthropic(
     max_tokens=8192,
 )
 
-tools = [web_search, read_url, write_report]
+tools = [web_search, read_url, write_report, knowledge_search]
 llm_with_tools = llm.bind_tools(tools)
 
 
