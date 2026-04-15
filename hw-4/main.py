@@ -1,8 +1,17 @@
-from agent import agent
+import json
+import uuid
+
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command
+
+from supervisor import supervisor
+
+# Tracks how many times research/critique were called (for round labels)
+_research_round = 0
+_critique_round = 0
 
 
 def _extract_text(content) -> str:
-    """Handle both str and list-of-blocks content (Anthropic format)."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -13,9 +22,149 @@ def _extract_text(content) -> str:
     return str(content)
 
 
+def _pretty_json(raw: str, model_name: str) -> str:
+    """Try to parse JSON and return a pretty model-like representation."""
+    try:
+        data = json.loads(raw)
+        lines = [f"  📎 {model_name}("]
+        for k, v in data.items():
+            lines.append(f"       {k}={json.dumps(v, ensure_ascii=False)},")
+        lines.append("     )")
+        return "\n".join(lines)
+    except Exception:
+        return f"  📎 {raw[:300]}"
+
+
+def _print_supervisor_chunk(chunk: dict) -> None:
+    """Print a stream chunk from the Supervisor graph."""
+    global _research_round, _critique_round
+
+    for node_name, node_output in chunk.items():
+        if node_name == "__interrupt__":
+            continue
+        messages = node_output.get("messages", []) if isinstance(node_output, dict) else []
+
+        for msg in messages:
+            if isinstance(msg, AIMessage):
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        name = tc.get("name", "tool")
+                        args = tc.get("args", {})
+                        # Section header
+                        if name == "plan":
+                            print(f"\n[Supervisor → Planner]")
+                        elif name == "research":
+                            _research_round += 1
+                            print(f"\n[Supervisor → Researcher]  (round {_research_round})")
+                        elif name == "critique":
+                            _critique_round += 1
+                            print(f"\n[Supervisor → Critic]")
+                        elif name == "save_report":
+                            print(f"\n[Supervisor → save_report]")
+                        # Tool call line
+                        if name == "save_report":
+                            fname = args.get("filename", "")
+                            content_len = len(args.get("content", ""))
+                            print(f'🔧 {name}(filename="{fname}", content="# ...{content_len} chars")')
+                        else:
+                            first_val = next(iter(args.values()), "") if args else ""
+                            print(f'🔧 {name}("{str(first_val)[:80]}")')
+                else:
+                    text = _extract_text(msg.content)
+                    if text.strip():
+                        print(f"\nAgent: {text}")
+
+            elif isinstance(msg, ToolMessage):
+                tool_name = getattr(msg, "name", "tool")
+                result = _extract_text(getattr(msg, "content", ""))
+                if tool_name == "plan":
+                    print(_pretty_json(result, "ResearchPlan"))
+                elif tool_name == "critique":
+                    print(_pretty_json(result, "CritiqueResult"))
+                elif tool_name == "research":
+                    # Internal calls were already printed by supervisor.py streaming
+                    pass
+                elif tool_name == "save_report":
+                    # Result after resume — success or feedback message
+                    if result.strip():
+                        print(f"  📎 {result[:200]}")
+                else:
+                    print(f"  📎 [{tool_name}] {result[:100]}")
+
+
+def _handle_interrupt(interrupt_value: dict, config: dict) -> None:
+    """Show proposed report and ask approve/edit/reject. Loops until resolved."""
+    filename = interrupt_value.get("filename", "report.md")
+    content = interrupt_value.get("content", "")
+
+    while True:
+        print("\n" + "=" * 60)
+        print("⏸️  ACTION REQUIRES APPROVAL")
+        print("=" * 60)
+        print(f'    Tool:  save_report')
+        print(f'    Args:  {{"filename": "{filename}", "content": "{content[:60]}..."}}')
+        print("=" * 60)
+
+        raw = input("\n  👉 approve / edit / reject: ").strip().lower()
+
+        if raw == "approve":
+            for chunk in supervisor.stream(
+                Command(resume={"action": "approve"}),
+                config=config,
+                stream_mode="updates",
+            ):
+                if "__interrupt__" in chunk:
+                    continue
+                _print_supervisor_chunk(chunk)
+            print(f"\n  ✅ Approved! Report saved to output/{filename}")
+            return
+
+        elif raw == "edit":
+            feedback = input("  ✏️  Your feedback: ").strip()
+            interrupted_again = False
+            new_interrupt_value = None
+            print("\n[Supervisor revises report based on feedback]")
+            for chunk in supervisor.stream(
+                Command(resume={"action": "edit", "feedback": feedback}),
+                config=config,
+                stream_mode="updates",
+            ):
+                if "__interrupt__" in chunk:
+                    interrupted_again = True
+                    interrupts = chunk["__interrupt__"]
+                    if interrupts:
+                        new_interrupt_value = interrupts[0].value
+                    break
+                _print_supervisor_chunk(chunk)
+
+            if interrupted_again and new_interrupt_value:
+                filename = new_interrupt_value.get("filename", filename)
+                content = new_interrupt_value.get("content", content)
+                interrupt_value = new_interrupt_value
+                # Loop continues → show HITL again
+            else:
+                return  # No new interrupt → done
+
+        elif raw == "reject":
+            for chunk in supervisor.stream(
+                Command(resume={"action": "reject"}),
+                config=config,
+                stream_mode="updates",
+            ):
+                if "__interrupt__" in chunk:
+                    continue
+                _print_supervisor_chunk(chunk)
+            print("\n  ❌ Report rejected. Not saved.")
+            return
+
+        else:
+            print("  Please type: approve, edit, or reject")
+
+
 def main():
-    print("Research Agent (type 'exit' to quit)")
-    print("-" * 40)
+    global _research_round, _critique_round
+    print("Multi-Agent Research System (type 'exit' to quit)")
+    print("-" * 50)
 
     while True:
         try:
@@ -26,54 +175,35 @@ def main():
 
         if not user_input:
             continue
-
         if user_input.lower() in ("exit", "quit"):
             print("Goodbye!")
             break
 
-        try:
-            for chunk in agent.stream(
-                {"messages": [("user", user_input)]},
-                config={"configurable": {"thread_id": "session_1"}},
-            ):
-                # Agent node: показуємо tool calls що плануються
-                if "agent" in chunk:
-                    for msg in chunk["agent"].get("messages", []):
-                        if hasattr(msg, "tool_calls") and msg.tool_calls:
-                            for tc in msg.tool_calls:
-                                args = tc.get("args", {})
-                                args_str = ", ".join(f'{k}="{v}"' for k, v in args.items())
-                                print(f"\n🔧 Tool call: {tc['name']}({args_str})")
-                        elif hasattr(msg, "content"):
-                            text = _extract_text(msg.content)
-                            if text.strip():
-                                print(f"\nAgent: {text}")
+        # New thread per request
+        thread_id = str(uuid.uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
+        _research_round = 0
+        _critique_round = 0
 
-                # Tools node: показуємо результат (включно з помилками)
-                if "tools" in chunk:
-                    for msg in chunk["tools"].get("messages", []):
-                        tool_name = getattr(msg, "name", "tool")
-                        result = _extract_text(getattr(msg, "content", ""))
-                        if result.startswith("Error") or result.startswith("Search error") or result.startswith("Knowledge search error"):
-                            print(f"📎 Result: ERROR — {result[:200]}")
-                        elif tool_name == "knowledge_search":
-                            lines = result.strip().split("\n\n")
-                            print(f"📎 Result: [{len(lines)} documents found]")
-                            for line in lines:
-                                # формат: "N. [source]\n   text"
-                                parts = line.split("\n", 1)
-                                header = parts[0].strip()
-                                body = parts[1].strip() if len(parts) > 1 else ""
-                                # витягуємо [source] з header
-                                src = header[header.find("[")+1:header.find("]")] if "[" in header else header
-                                print(f"   - [{src}] {body[:80]}")
-                        elif tool_name == "web_search":
-                            count = result.count("\nURL:")
-                            print(f"📎 Result: Found {count} results...")
-                        elif tool_name == "read_url":
-                            print(f"📎 Result: [{len(result)} chars] {result[:80].strip()}...")
-                        else:
-                            print(f"📎 Result: {result[:100]}")
+        try:
+            interrupted = False
+            interrupt_value = None
+
+            for chunk in supervisor.stream(
+                {"messages": [("user", user_input)]},
+                config=config,
+                stream_mode="updates",
+            ):
+                if "__interrupt__" in chunk:
+                    interrupted = True
+                    interrupts = chunk["__interrupt__"]
+                    if interrupts:
+                        interrupt_value = interrupts[0].value
+                    break
+                _print_supervisor_chunk(chunk)
+
+            if interrupted and interrupt_value:
+                _handle_interrupt(interrupt_value, config)
 
         except KeyboardInterrupt:
             print("\n[interrupted]")

@@ -2,11 +2,11 @@ import os
 import trafilatura
 from ddgs import DDGS
 from langchain_core.tools import tool
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from config import settings
 from retriever import get_retriever
-from state_store import get_last_text
 
 
 @tool
@@ -42,28 +42,37 @@ def read_url(url: str) -> str:
         return f"Error reading URL {url}: {e}"
 
 
-class WriteReportInput(BaseModel):
+class SaveReportInput(BaseModel):
     filename: str = Field(description="Filename for the report, e.g. 'rag_comparison.md'")
+    content: str = Field(description="Full Markdown content of the report")
 
 
-@tool("write_report", args_schema=WriteReportInput)
-def write_report(filename: str) -> str:
-    """Save the research report you just wrote to a file. Call this after writing the complete report in your response."""
-    try:
-        content = get_last_text()
-        if not content:
-            return "Error: No report text found. Write the complete report in your response first, then call this tool."
-        filename = str(filename).strip().replace("/", "_").replace("\\", "_")
-        if not filename.endswith(".md"):
-            filename += ".md"
+@tool("save_report", args_schema=SaveReportInput)
+def save_report(filename: str, content: str) -> str:
+    """Save the research report to a file. Requires user approval before saving."""
+    filename = str(filename).strip().replace("/", "_").replace("\\", "_")
+    if not filename.endswith(".md"):
+        filename += ".md"
+
+    decision = interrupt({
+        "filename": filename,
+        "content": content,
+    })
+
+    action = decision.get("action", "reject")
+
+    if action == "approve":
         output_dir = str(settings.output_dir)
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, filename)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Report saved to {path}"
-    except Exception as e:
-        return f"Error saving report: {e}"
+    elif action == "edit":
+        feedback = decision.get("feedback", "")
+        return f"User requested edits: {feedback}. Please revise the report and call save_report again with the updated content."
+    else:
+        return "User rejected saving the report. Do not retry."
 
 
 @tool
