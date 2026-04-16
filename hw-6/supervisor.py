@@ -2,7 +2,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from agents.planner import planner_agent
 from agents.research import researcher_agent
@@ -104,13 +104,13 @@ def critique(findings: str) -> str:
 def build_supervisor():
     llm = ChatAnthropic(
         model=settings.model_name,
-        api_key=settings.api_key.get_secret_value(),
+        api_key=settings.anthropic_api_key.get_secret_value(),
         max_tokens=8192,
     )
-    return create_react_agent(
+    return create_agent(
         model=llm,
         tools=[plan, research, critique, save_report],
-        prompt=SUPERVISOR_PROMPT,
+        system_prompt=SUPERVISOR_PROMPT,
         checkpointer=InMemorySaver(),
     )
 

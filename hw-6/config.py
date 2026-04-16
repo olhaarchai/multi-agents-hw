@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    api_key: SecretStr
+    anthropic_api_key: SecretStr
     model_name: str
 
     # Web search
@@ -46,13 +46,19 @@ RESEARCHER_PROMPT = """You are a Research Agent. You receive a research request 
 
 Your strategy:
 1. Use knowledge_search FIRST for topics related to RAG, LLMs, LangChain, AI
-2. Use web_search for up-to-date information (2-3 searches minimum)
-3. Use read_url to read the most relevant pages in full detail
+2. Use web_search for up-to-date information
+3. Use read_url to read the single most relevant page in full detail
 4. Compile all findings into a comprehensive Markdown report with headings, bullet points, and ## Sources section
 
+STRICT TOOL LIMITS (violating these wastes money):
+- MAXIMUM 1 knowledge_search call total
+- MAXIMUM 2 web_search calls total. After 2 web searches, STOP searching.
+- MAXIMUM 1 read_url call total. Pick only the single most relevant URL.
+- Total tool calls must NOT exceed 4.
+- After gathering information, IMMEDIATELY write your final report. Do NOT do additional searches.
+
 Rules:
-- Always do at least 2 web searches
-- If a search returns no results, try rephrasing
+- If a search returns no results, do NOT retry — use what you have
 - Include specific facts, numbers, and dates where found
 - Keep the report focused: 500-800 words, clear structure
 """
@@ -60,14 +66,16 @@ Rules:
 CRITIC_PROMPT = """You are a Research Critic. You evaluate the quality of research findings through independent verification.
 
 You assess three dimensions:
-1. **Freshness** — Is the data up-to-date? Search for newer sources if you suspect outdated info
+1. **Freshness** — Is the data up-to-date? Check if newer sources exist.
 2. **Completeness** — Does the research fully cover the original request? Are there missing subtopics?
 3. **Structure** — Are findings well-organized and ready to become a report?
 
-You are NOT just reviewing text — you actively verify by:
-- Using web_search to check if newer data exists (especially for benchmarks, statistics, dates)
-- Using read_url to verify claims from sources
-- Using knowledge_search to check if local docs have relevant info that was missed
+STRICT TOOL LIMITS (violating these wastes money):
+- MAXIMUM 1 web_search call for verification
+- MAXIMUM 1 knowledge_search call to check for missed local info
+- Do NOT use read_url unless absolutely necessary (max 1 call)
+- Total tool calls must NOT exceed 3.
+- After verification, IMMEDIATELY return your CritiqueResult. Do NOT do additional searches.
 
 After your verification, return a structured CritiqueResult with:
 - verdict: "APPROVE" if research is solid, "REVISE" if significant gaps exist

@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -11,9 +11,9 @@ class ResearchPlan(BaseModel):
 
 class CritiqueResult(BaseModel):
     verdict: Literal["APPROVE", "REVISE"]
-    is_fresh: bool = Field(description="Is the data up-to-date and based on recent sources?")
-    is_complete: bool = Field(description="Does the research fully cover the user's original request?")
-    is_well_structured: bool = Field(description="Are findings logically organized and ready for a report?")
+    is_fresh: Optional[bool] = Field(default=None, description="Is the data up-to-date and based on recent sources?")
+    is_complete: Optional[bool] = Field(default=None, description="Does the research fully cover the user's original request?")
+    is_well_structured: Optional[bool] = Field(default=None, description="Are findings logically organized and ready for a report?")
     strengths: list[str] = Field(description="What is good about the research")
     gaps: list[str] = Field(description="What is missing, outdated, or poorly structured")
     revision_requests: list[str] = Field(description="Specific things to fix if verdict is REVISE")
