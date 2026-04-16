@@ -24,3 +24,6 @@ __pycache__
 *.swp
 
 .DS_Store
+
+.pytest_cache
+.deepeval

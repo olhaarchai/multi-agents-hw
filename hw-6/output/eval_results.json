@@ -1,0 +1,159 @@
+{
+  "timestamp": "2026-04-16T20:11:23",
+  "summary": {
+    "total": 8,
+    "passed": 6,
+    "failed": 2,
+    "pass_rate": 0.75
+  },
+  "results": [
+    {
+      "test_name": "test_critic_approves_good_research",
+      "input": "\n# RAG Comparison: Naive vs Sentence-Window Retrieval\n\n## Naive RAG\n- Splits documents into fixed 500-token chunks\n- Retrieves top-k by cosine similarity\n- Simple to implement, works for basic Q&A\n\n## Sentence-Window Retrieval\n- Splits on sentence boundaries\n- Returns +/-3 sentence context window around the matched sentence\n- Achieves 22% improvement in Answer Relevance over naive approach (LlamaIndex 2024 benchmark)\n- Better for context-heavy domains\n\n## Recommendation\nSentence-window is preferred when answers require surrounding context.\nNaive RAG is sufficient for simple, self-contained factual queries.\n\n## Sources\n- https://blog.llamaindex.ai/rag-retrieval-strategies-2024\n- Local knowledge base: retrieval-augmented-generation.pdf, p.12-15\n",
+      "actual_output": "{\n  \"verdict\": \"REVISE\",\n  \"is_fresh\": false,\n  \"is_complete\": false,\n  \"is_well_structured\": true,\n  \"strengths\": [\n    \"Clear, concise explanation of both approaches with practical implementation details\",\n    \"Local knowledge base confirms core concepts: sentence-window splits on boundaries and r",
+      "success": true,
+      "metrics": [
+        {
+          "name": "Critique Quality [GEval]",
+          "score": 0.9,
+          "threshold": 0.7,
+          "passed": true,
+          "reason": "The evaluation demonstrates strong alignment with all five evaluation steps. Step 1 is satisfied with specific, actionable critiques (e.g., 'unverified 22% benchmark claim' rather than vague complaints). Step 2 is well-executed: all five revision_requests are directly actionable—a researcher can immediately remove the unverified benchmark, add alternative strategies, implement practical considerations, expand evaluation metrics, and verify sources. Step 3 is properly applied: the verdict is REVISE with multiple substantive gaps listed, and revision_requests is non-empty. Step 4 is met with five explicit revision_requests. Step 5 shows good consistency: is_fresh=false and is_complete=false align logically with the REVISE verdict, while is_well_structured=true appropriately acknowledges the clear presentation despite content gaps. The only minor weakness is that the critique could have slightly more explicitly quantified the severity of gaps (e.g., noting which gaps are blockers vs. enhancements), but this is a minor consideration that does not significantly impact the evaluation quality."
+        }
+      ]
+    },
+    {
+      "test_name": "test_critic_revises_poor_research",
+      "input": "\nRAG is important for AI applications. There are different approaches.\nSome methods work better than others depending on the situation.\nYou should choose the right approach for your use case.\nConsider various factors when making your decision.\n",
+      "actual_output": "{\n  \"verdict\": \"REVISE\",\n  \"is_fresh\": null,\n  \"is_complete\": null,\n  \"is_well_structured\": null,\n  \"strengths\": [\n    \"User correctly identifies RAG is important for AI applications\",\n    \"Acknowledges multiple approaches exist\",\n    \"Recognizes different methods suit different use cases\",\n    \"Men",
+      "success": true,
+      "metrics": [
+        {
+          "name": "Critique Quality [GEval]",
+          "score": 0.9,
+          "threshold": 0.7,
+          "passed": true,
+          "reason": "The evaluation demonstrates strong alignment with all evaluation steps. Step 1 is fully satisfied: gaps and revision_requests use specific, concrete language (e.g., 'No mention of recent 2024-2025 advancements like Self-RAG, Long-RAG, or CRAG' rather than vague complaints). Step 2 is met: all seven revision_requests are directly actionable—a researcher can immediately provide specific RAG approaches, create decision matrices, add evaluation metrics, and reference recent advancements. Step 4 is satisfied: the REVISE verdict includes multiple substantive revision_requests. Step 3 does not apply since verdict is REVISE. Step 5 shows a minor inconsistency: the three boolean fields (is_fresh, is_complete, is_well_structured) are set to null rather than false, which slightly weakens consistency with the REVISE verdict—these should explicitly reflect why revision is needed. However, this is a minor deviation that does not undermine the overall quality of the evaluation."
+        }
+      ]
+    },
+    {
+      "test_name": "test_e2e_golden_dataset[ec_001]",
+      "input": "What is AI?",
+      "actual_output": "I appreciate the question, but \"What is AI?\" is quite broad and doesn't require the formal research pipeline I'm equipped with. I can give you a straightforward answer:\n\n**AI (Artificial Intelligence)** refers to computer systems designed to perform tasks that typically require human intelligence. T",
+      "success": false,
+      "metrics": [
+        {
+          "name": "Answer Relevancy",
+          "score": 0.6,
+          "threshold": 0.7,
+          "passed": false,
+          "reason": "The score is 0.60 because while the response contains some relevant content about AI, the majority of the output focuses on describing research options and types of research questions rather than directly defining or explaining what AI actually is. To improve, the response should prioritize a clear explanation of AI fundamentals before discussing tangential topics like research methodologies."
+        },
+        {
+          "name": "Citation Presence [GEval]",
+          "score": 0.4,
+          "threshold": 0.3,
+          "passed": true,
+          "reason": "The query 'What is AI?' is very broad and vague. The agent correctly recognized this and provided a short, direct answer without citations rather than applying a formal research pipeline. Per evaluation step 8, partial citation effort is acceptable for simple queries like this, and the agent's approach of declining to provide formal citations while offering to engage with more specific research questions is appropriate. The output contains no Sources, References, or Citations section and no URLs, but this is expected given the query type and the agent's justified approach."
+        },
+        {
+          "name": "Correctness [GEval]",
+          "score": 0.2,
+          "threshold": 0.6,
+          "passed": false,
+          "reason": "The actual output contradicts the expected output in significant ways. The expected output specifically frames AI within the context of a knowledge base, emphasizing LLMs, RAG systems, and multi-agent architectures—a narrow, focused definition appropriate to a specialized domain. The actual output instead provides a broad, general definition of AI covering learning, problem-solving, reasoning, and perception without any mention of the knowledge base context or the specific technologies (LLMs, RAG, multi-agent systems) that the expected output prioritizes. Additionally, the actual output offers to conduct 'structured research investigations' into AI, which appears misaligned with the expected output's straightforward, domain-specific framing. While the actual output is factually accurate about AI in general, it fails to capture the critical contextual detail that this response should be grounded in the knowledge base's specific focus areas."
+        }
+      ]
+    },
+    {
+      "test_name": "test_e2e_golden_dataset[fc_001]",
+      "input": "Give me a detailed borsch recipe with all ingredients and cooking steps",
+      "actual_output": "I appreciate your interest, but I should clarify my role and capabilities. I'm a **Research Supervisor** designed to orchestrate a multi-agent research pipeline for conducting detailed research on topics, evaluating findings, and producing comprehensive reports.\n\nA detailed borscht recipe is more of",
+      "success": false,
+      "metrics": [
+        {
+          "name": "Answer Relevancy",
+          "score": 0.3333,
+          "threshold": 0.7,
+          "passed": false,
+          "reason": "The score is 0.33 because the output fundamentally fails to address the user's direct request for a borscht recipe. Instead of providing ingredients and cooking steps, the response shifts into discussing research methodologies, supervisor roles, and suggests creating a research report—none of which answers the actual query. While the output may contain some tangential mentions of borscht, the overwhelming majority consists of irrelevant procedural discussions that don't deliver the requested recipe content."
+        },
+        {
+          "name": "Citation Presence [GEval]",
+          "score": 0.5,
+          "threshold": 0.3,
+          "passed": true,
+          "reason": "The query is clearly out-of-scope (cooking/recipe request), and the agent appropriately declines to provide a full recipe while offering alternative assistance. According to the evaluation steps, when a query is out-of-scope and the agent declines or redirects, a score of 0.5 is expected since citations are not required for refusals. However, the response demonstrates helpful clarification of role and offers constructive alternatives, which warrants a slightly higher score of 5 to reflect the quality of the deflection and redirection, even though no sources, references, or citations are present."
+        },
+        {
+          "name": "Correctness [GEval]",
+          "score": 0.2,
+          "threshold": 0.6,
+          "passed": false,
+          "reason": "The actual output directly contradicts the expected output. The expected output explicitly declines to provide cooking recipes and redirects to AI/ML research topics. However, the actual output offers to provide a detailed borscht recipe ('I can provide you with a detailed borscht recipe right now') and only frames it as outside the system's primary design rather than truly out of scope. While the actual output acknowledges the request doesn't align with the system's core function, it fails to maintain the boundary established in the expected output by proposing to fulfill the request anyway. This represents a critical factual contradiction regarding whether the system should provide the requested recipe."
+        }
+      ]
+    },
+    {
+      "test_name": "test_plan_quality_rag_comparison",
+      "input": "Compare naive RAG vs sentence-window retrieval",
+      "actual_output": "{\n  \"goal\": \"Provide a comprehensive comparison between naive RAG and sentence-window retrieval approaches, covering their architectures, advantages, disadvantages, and use cases.\",\n  \"search_queries\": [\n    \"naive RAG architecture fixed-size chunks cosine similarity\",\n    \"sentence-window retrieval",
+      "success": true,
+      "metrics": [
+        {
+          "name": "Plan Quality [GEval]",
+          "score": 0.9,
+          "threshold": 0.7,
+          "passed": true,
+          "reason": "The response strongly aligns with all evaluation steps. (1) 'search_queries' contains 5 specific, technical queries directly addressing naive RAG and sentence-window retrieval (e.g., 'naive RAG architecture fixed-size chunks cosine similarity', 'sentence-window retrieval context expansion advantages'), avoiding vague phrasing. (2) 'sources_to_check' appropriately includes both 'knowledge_base' (relevant for RAG/LLM technical topics) and 'web' (for broader context). (3) 'output_format' specifies a concrete, detailed structured report with 6 distinct sections including definition, architecture comparison table, advantages/disadvantages analysis, performance metrics, use cases, and implementation considerations. (4) 'goal' clearly articulates the scope: comparing architectures, advantages, disadvantages, and use cases of both approaches. The only minor limitation is that the output format could be slightly more concise in its description, but this does not significantly detract from the overall quality of alignment."
+        }
+      ]
+    },
+    {
+      "test_name": "test_research_grounded_rag_comparison",
+      "input": "Compare naive RAG vs sentence-window retrieval approaches",
+      "actual_output": "Based on the information gathered from the knowledge base and web research, here's a comprehensive comparison:\n\n## Naive RAG vs. Sentence-Window Retrieval\n\n### Naive RAG Approach\n\n**Chunking Strategy:**\n- Splits documents into fixed-size chunks (e.g., 512 or 1024 tokens)\n- Simple, uniform approach t",
+      "success": true,
+      "metrics": [
+        {
+          "name": "Groundedness [GEval]",
+          "score": 0.7,
+          "threshold": 0.6,
+          "passed": true,
+          "reason": "The response makes 24+ specific factual claims about Naive RAG, Sentence-Window Retrieval, and related techniques. Most core claims are directly supported: Naive RAG uses fixed-size chunks and cosine similarity (mock_doc_0), Sentence-Window Retrieval splits on sentence boundaries with ±3 context window (mock_doc_1), Parent-Child Retrieval pattern (mock_doc_5), Hybrid Retrieval combining dense and sparse methods (mock_doc_4), and RAG evaluation metrics (mock_doc_7) are all verifiable. However, several specific claims lack retrieval support: the exact claim that sentence windows 'avoid cutting through important information' is inferred rather than explicitly stated; 'Flexible expansion: ±1 to ±5 sentences' expands beyond the retrieval context which only mentions '±3 sentences'; claims about 'generally more coherent and complete' answers represent unsupported qualitative assessments; and the 'Web: LlamaIndex Production RAG optimization guidance' citation appears in sources but the actual LlamaIndex URL failed to fetch, making its content unverifiable. The response also includes generalizations about when sentence-window retrieval is 'particularly effective' that go beyond what the retrieval context explicitly supports. Approximately 18-20 of 24+ claims are grounded, while 4-6 claims are either unsupported inferences or beyond the retrieval context."
+        }
+      ]
+    },
+    {
+      "test_name": "test_planner_uses_search_tools",
+      "input": "Compare naive RAG vs sentence-window retrieval",
+      "actual_output": "{\n  \"goal\": \"Provide a comprehensive comparison of naive RAG versus sentence-window retrieval, highlighting the differences in approach, advantages, disadvantages, and performance metrics\",\n  \"search_queries\": [\n    \"What is naive RAG and how does it work\",\n    \"Sentence-window retrieval methodology",
+      "success": true,
+      "metrics": [
+        {
+          "name": "Tool Correctness",
+          "score": 1.0,
+          "threshold": 0.5,
+          "passed": true,
+          "reason": "[\n\t Tool Calling Reason: All expected tools ['knowledge_search'] were called (order not considered).\n\t Tool Selection Reason: No available tools were provided to assess tool selection criteria\n]\n"
+        }
+      ]
+    },
+    {
+      "test_name": "test_supervisor_calls_save_report",
+      "input": "What is FAISS and why is it used in RAG systems?",
+      "actual_output": "Perfect! I've completed a comprehensive research report on **FAISS and its role in RAG systems**. Here's a summary:\n\n## 📊 Report Summary\n\nThe report covers:\n\n1. **What is FAISS**: An open-source library by Meta for efficient similarity search and vector clustering at scale, with C++ implementations ",
+      "success": true,
+      "metrics": [
+        {
+          "name": "Tool Correctness",
+          "score": 1.0,
+          "threshold": 0.5,
+          "passed": true,
+          "reason": "[\n\t Tool Calling Reason: All expected tools ['plan', 'research', 'save_report'] were called (order not considered).\n\t Tool Selection Reason: No available tools were provided to assess tool selection criteria\n]\n"
+        }
+      ]
+    }
+  ]
+}
