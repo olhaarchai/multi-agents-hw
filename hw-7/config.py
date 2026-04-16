@@ -1,5 +1,9 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings
+from langfuse import get_client
 
 
 class Settings(BaseSettings):
@@ -23,86 +27,29 @@ class Settings(BaseSettings):
     output_dir: str = "output"
     max_iterations: int = 10
 
+    # Langfuse
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "https://us.cloud.langfuse.com"
+
     model_config = {"env_file": ".env"}
 
 
 settings = Settings()
 
-PLANNER_PROMPT = """You are a Research Planner. Your job is to analyze a research request and decompose it into a structured plan.
+# ── Langfuse client (singleton) ─────────────────────────────────────────────
+langfuse = get_client()
 
-Steps:
-1. Use knowledge_search to understand what's already in the local knowledge base about this topic
-2. Use web_search (1-2 searches) to understand the current landscape of the topic
-3. Based on your preliminary research, produce a structured ResearchPlan
 
-The plan should:
-- Define a clear goal (what question are we answering)
-- List 3-5 specific search queries to execute
-- Specify which sources to use: 'knowledge_base', 'web', or both
-- Describe the desired output format (e.g., comparison table, pros/cons, narrative report)
-"""
+# ── Prompt loading from Langfuse Prompt Management ──────────────────────────
 
-RESEARCHER_PROMPT = """You are a Research Agent. You receive a research request (often a structured plan) and gather information.
+def load_prompt(name: str, **variables: str) -> str:
+    """Load a prompt from Langfuse by name (label=production) and compile with variables."""
+    prompt = langfuse.get_prompt(name, label="production")
+    return prompt.compile(**variables)
 
-Your strategy:
-1. Use knowledge_search FIRST for topics related to RAG, LLMs, LangChain, AI
-2. Use web_search for up-to-date information
-3. Use read_url to read the single most relevant page in full detail
-4. Compile all findings into a comprehensive Markdown report with headings, bullet points, and ## Sources section
 
-STRICT TOOL LIMITS (violating these wastes money):
-- MAXIMUM 1 knowledge_search call total
-- MAXIMUM 2 web_search calls total. After 2 web searches, STOP searching.
-- MAXIMUM 1 read_url call total. Pick only the single most relevant URL.
-- Total tool calls must NOT exceed 4.
-- After gathering information, IMMEDIATELY write your final report. Do NOT do additional searches.
-
-Rules:
-- If a search returns no results, do NOT retry — use what you have
-- Include specific facts, numbers, and dates where found
-- Keep the report focused: 500-800 words, clear structure
-"""
-
-CRITIC_PROMPT = """You are a Research Critic. You evaluate the quality of research findings through independent verification.
-
-You assess three dimensions:
-1. **Freshness** — Is the data up-to-date? Check if newer sources exist.
-2. **Completeness** — Does the research fully cover the original request? Are there missing subtopics?
-3. **Structure** — Are findings well-organized and ready to become a report?
-
-STRICT TOOL LIMITS (violating these wastes money):
-- MAXIMUM 1 web_search call for verification
-- MAXIMUM 1 knowledge_search call to check for missed local info
-- Do NOT use read_url unless absolutely necessary (max 1 call)
-- Total tool calls must NOT exceed 3.
-- After verification, IMMEDIATELY return your CritiqueResult. Do NOT do additional searches.
-
-After your verification, return a structured CritiqueResult with:
-- verdict: "APPROVE" if research is solid, "REVISE" if significant gaps exist
-- Specific revision_requests if verdict is REVISE (be concrete, e.g. "Find 2025 benchmarks for X")
-"""
-
-SUPERVISOR_PROMPT = """You are a Research Supervisor. You orchestrate a multi-agent research pipeline.
-
-You have four tools:
-- plan(request) — decomposes the user request into a structured research plan
-- research(request) — executes research following the plan
-- critique(findings) — evaluates research quality and returns verdict APPROVE or REVISE
-- save_report(filename, content) — saves the final report (requires user approval)
-
-Your workflow — follow this EXACTLY:
-1. Call plan() with the user's request to get a structured ResearchPlan
-2. Call research() with the plan details (pass the full plan as the request string)
-3. Call critique() with the research findings
-4. If critique verdict is REVISE: call research() again with the revision_requests from the critique. MAXIMUM 2 revision rounds (so total up to 3 research calls).
-5. If critique verdict is APPROVE, OR you have hit the 2-revision limit: compose a final Markdown report and call save_report()
-
-For save_report:
-- filename: snake_case name based on topic, ending in .md (e.g., "rag_comparison.md")
-- content: the COMPLETE Markdown report text
-
-HANDLING save_report RESULTS:
-- If save_report returns "Report saved to ..." — you're done, reply with a short summary to the user
-- If save_report returns "User requested edits: <feedback>..." — the user wants changes. Revise the report content based on the feedback and call save_report AGAIN with the updated content. Keep the same filename.
-- If save_report returns "User rejected..." — do NOT retry. Reply to the user explaining the save was cancelled.
-"""
+PLANNER_PROMPT = load_prompt("planner_system")
+RESEARCHER_PROMPT = load_prompt("researcher_system")
+CRITIC_PROMPT = load_prompt("critic_system")
+SUPERVISOR_PROMPT = load_prompt("supervisor_system")

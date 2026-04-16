@@ -18,3 +18,4 @@ deepeval==3.9.5
 ragas==0.4.3
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+langfuse>=0.1.0

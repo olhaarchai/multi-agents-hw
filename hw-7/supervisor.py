@@ -1,14 +1,19 @@
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain.agents import create_agent
+from langfuse.langchain import CallbackHandler
 
 from agents.planner import planner_agent
 from agents.research import researcher_agent
 from agents.critic import critic_agent
 from config import settings, SUPERVISOR_PROMPT
 from tools import save_report  # HITL tool
+
+# Shared Langfuse callback handler for all sub-agent calls
+_langfuse_handler = CallbackHandler()
 
 
 def _extract_text(content) -> str:
@@ -30,6 +35,7 @@ def _stream_agent(agent, request: str) -> dict:
     seen_ids: set = set()
     for state in agent.stream(
         {"messages": [("user", request)]},
+        config=RunnableConfig(callbacks=[_langfuse_handler]),
         stream_mode="values",
     ):
         final_state = state

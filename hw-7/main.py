@@ -2,9 +2,16 @@ import json
 import uuid
 
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
+from langfuse import observe, get_client, propagate_attributes
+from langfuse.langchain import CallbackHandler
 
 from supervisor import supervisor
+
+# Langfuse
+langfuse = get_client()
+_langfuse_handler = CallbackHandler()
 
 # Tracks how many times research/critique were called (for round labels)
 _research_round = 0
@@ -92,7 +99,7 @@ def _print_supervisor_chunk(chunk: dict) -> None:
                     print(f"  📎 [{tool_name}] {result[:100]}")
 
 
-def _handle_interrupt(interrupt_value: dict, config: dict) -> None:
+def _handle_interrupt(interrupt_value: dict, config: RunnableConfig) -> None:
     """Show proposed report and ask approve/edit/reject. Loops until resolved."""
     filename = interrupt_value.get("filename", "report.md")
     content = interrupt_value.get("content", "")
@@ -161,10 +168,45 @@ def _handle_interrupt(interrupt_value: dict, config: dict) -> None:
             print("  Please type: approve, edit, or reject")
 
 
-def main():
+@observe(name="research-system-run")
+def _run_query(user_input: str, session_id: str):
+    """Run a single user query through the supervisor with Langfuse tracing."""
     global _research_round, _critique_round
+    _research_round = 0
+    _critique_round = 0
+
+    thread_id = str(uuid.uuid4())
+    config = RunnableConfig(
+        configurable={"thread_id": thread_id},
+        callbacks=[_langfuse_handler],
+    )
+
+    interrupted = False
+    interrupt_value = None
+
+    for chunk in supervisor.stream(
+        {"messages": [("user", user_input)]},
+        config=config,
+        stream_mode="updates",
+    ):
+        if "__interrupt__" in chunk:
+            interrupted = True
+            interrupts = chunk["__interrupt__"]
+            if interrupts:
+                interrupt_value = interrupts[0].value
+            break
+        _print_supervisor_chunk(chunk)
+
+    if interrupted and interrupt_value:
+        _handle_interrupt(interrupt_value, config)
+
+
+def main():
     print("Multi-Agent Research System (type 'exit' to quit)")
     print("-" * 50)
+
+    session_id = f"session-{uuid.uuid4().hex[:8]}"
+    print(f"Langfuse session: {session_id}")
 
     while True:
         try:
@@ -179,34 +221,17 @@ def main():
             print("Goodbye!")
             break
 
-        # New thread per request
-        thread_id = str(uuid.uuid4())
-        config = {"configurable": {"thread_id": thread_id}}
-        _research_round = 0
-        _critique_round = 0
-
         try:
-            interrupted = False
-            interrupt_value = None
-
-            for chunk in supervisor.stream(
-                {"messages": [("user", user_input)]},
-                config=config,
-                stream_mode="updates",
+            with propagate_attributes(
+                session_id=session_id,
+                user_id="student",
+                tags=["hw-7", "multi-agent", "research"],
             ):
-                if "__interrupt__" in chunk:
-                    interrupted = True
-                    interrupts = chunk["__interrupt__"]
-                    if interrupts:
-                        interrupt_value = interrupts[0].value
-                    break
-                _print_supervisor_chunk(chunk)
-
-            if interrupted and interrupt_value:
-                _handle_interrupt(interrupt_value, config)
-
+                _run_query(user_input, session_id)
         except KeyboardInterrupt:
             print("\n[interrupted]")
+
+    langfuse.flush()
 
 
 if __name__ == "__main__":
