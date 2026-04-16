@@ -14,3 +14,5 @@ trafilatura>=2.0.0
 pypdf
 pydantic>=2.12.0
 pydantic-settings>=2.12.0
+fastmcp>=3.2.0
+acp-sdk>=1.0.3

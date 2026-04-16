@@ -1,17 +1,28 @@
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 import trafilatura
 from ddgs import DDGS
-from langchain_core.tools import tool
-from langgraph.types import interrupt
-from pydantic import BaseModel, Field
+from fastmcp import FastMCP
 
 from config import settings
 from retriever import get_retriever
 
+mcp = FastMCP("SearchMCP")
+_retriever = None
 
-@tool
+
+def _get_retriever_cached():
+    global _retriever
+    if _retriever is None:
+        _retriever = get_retriever()
+    return _retriever
+
+
+@mcp.tool
 def web_search(query: str) -> str:
-    """Search the web using DuckDuckGo. Returns a list of results with title, URL, and snippet."""
+    """Search the web using DuckDuckGo. Returns results with title, URL, and snippet."""
     try:
         results = DDGS().text(query, max_results=settings.max_search_results)
         if not results:
@@ -27,9 +38,9 @@ def web_search(query: str) -> str:
         return f"Search error: {e}"
 
 
-@tool
+@mcp.tool
 def read_url(url: str) -> str:
-    """Fetch and extract the main text content from a URL. Returns up to 5000 characters."""
+    """Fetch and extract main text content from a URL. Returns up to ~5000 characters."""
     try:
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
@@ -42,44 +53,11 @@ def read_url(url: str) -> str:
         return f"Error reading URL {url}: {e}"
 
 
-class SaveReportInput(BaseModel):
-    filename: str = Field(description="Filename for the report, e.g. 'rag_comparison.md'")
-    content: str = Field(description="Full Markdown content of the report")
-
-
-@tool("save_report", args_schema=SaveReportInput)
-def save_report(filename: str, content: str) -> str:
-    """Save the research report to a file. Requires user approval before saving."""
-    filename = str(filename).strip().replace("/", "_").replace("\\", "_")
-    if not filename.endswith(".md"):
-        filename += ".md"
-
-    decision = interrupt({
-        "filename": filename,
-        "content": content,
-    })
-
-    action = decision.get("action", "reject")
-
-    if action == "approve":
-        output_dir = str(settings.output_dir)
-        os.makedirs(output_dir, exist_ok=True)
-        path = os.path.join(output_dir, filename)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"Report saved to {path}"
-    elif action == "edit":
-        feedback = decision.get("feedback", "")
-        return f"User requested edits: {feedback}. Please revise the report and call save_report again with the updated content."
-    else:
-        return "User rejected saving the report. Do not retry."
-
-
-@tool
+@mcp.tool
 def knowledge_search(query: str) -> str:
-    """Search the local knowledge base. Use for questions about RAG, LLMs, LangChain, or other ingested documents."""
+    """Search the local knowledge base (RAG hybrid: FAISS + BM25 + reranker)."""
     try:
-        retriever = get_retriever()
+        retriever = _get_retriever_cached()
         docs = retriever.invoke(query)
         if not docs:
             return "No results found in knowledge base."
@@ -92,3 +70,19 @@ def knowledge_search(query: str) -> str:
         return "\n\n".join(lines)
     except Exception as e:
         return f"Knowledge search error: {e}"
+
+
+@mcp.resource("resource://knowledge-base-stats")
+def kb_stats() -> str:
+    """Number of indexed chunks and index directory."""
+    import json
+    chunks_path = os.path.join(settings.index_dir, "bm25_chunks.json")
+    if not os.path.exists(chunks_path):
+        return "Knowledge base not indexed yet. Run: python ingest.py"
+    with open(chunks_path) as f:
+        data = json.load(f)
+    return f"Knowledge base: {len(data)} chunks indexed at '{settings.index_dir}'"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="http", host="0.0.0.0", port=8901)

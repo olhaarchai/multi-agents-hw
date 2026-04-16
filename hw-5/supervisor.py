@@ -1,105 +1,70 @@
+import fastmcp
+from acp_sdk.client import Client as ACPClient
+from acp_sdk.models import Message, MessagePart
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel, Field
 
-from agents.planner import planner_agent
-from agents.research import researcher_agent
-from agents.critic import critic_agent
-from config import settings, SUPERVISOR_PROMPT
-from tools import save_report  # HITL tool
+from config import settings, SUPERVISOR_PROMPT, ACP_SERVER_URL, REPORT_MCP_URL
 
 
-def _extract_text(content) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in content
+# ── ACP delegation tools (async) ──────────────────────────────────────────────
+
+async def _acp_call(agent_name: str, text: str) -> str:
+    async with ACPClient(base_url=ACP_SERVER_URL, headers={"Content-Type": "application/json"}) as client:
+        run = await client.run_sync(
+            agent=agent_name,
+            input=[Message(role="user", parts=[MessagePart(content=text)])],
         )
-    return str(content)
-
-
-def _stream_agent(agent, request: str) -> dict:
-    """Stream an agent in values mode — one LLM pass. Prints intermediate tool calls
-    with 2-space indent. Returns the final state dict (contains 'messages' and optionally
-    'structured_response')."""
-    final_state: dict = {}
-    seen_ids: set = set()
-    for state in agent.stream(
-        {"messages": [("user", request)]},
-        stream_mode="values",
-    ):
-        final_state = state
-        for msg in state.get("messages", []):
-            mid = getattr(msg, "id", None) or id(msg)
-            if mid in seen_ids:
-                continue
-            seen_ids.add(mid)
-            if isinstance(msg, AIMessage) and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    name = tc.get("name", "")
-                    args = tc.get("args", {})
-                    args_str = ", ".join(
-                        f'{k}="{str(v)[:80]}"' for k, v in args.items()
-                    )
-                    print(f"  🔧 {name}({args_str})")
-            elif isinstance(msg, ToolMessage):
-                tool_name = getattr(msg, "name", "")
-                content = _extract_text(getattr(msg, "content", ""))
-                if tool_name == "knowledge_search":
-                    count = len([x for x in content.split("\n\n") if x.strip()])
-                    print(f"  📎 [{count} documents found]")
-                elif tool_name == "web_search":
-                    count = content.count("URL:")
-                    print(f"  📎 [{count} results found]")
-                elif tool_name == "read_url":
-                    print(f"  📎 [{len(content)} chars]")
-    return final_state
-
-
-def _final_ai_text(state: dict) -> str:
-    """Extract last AI message text from state (for Research agent)."""
-    for msg in reversed(state.get("messages", [])):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            text = _extract_text(msg.content)
-            if text.strip():
-                return text
-    return ""
-
-
-# ── Tool wrappers for sub-agents (single-pass via stream_mode="values") ───────
-
-@tool
-def plan(request: str) -> str:
-    """Decompose the user research request into a structured ResearchPlan using the Planner Agent."""
-    state = _stream_agent(planner_agent, request)
-    structured = state.get("structured_response")
-    if structured is not None:
-        return structured.model_dump_json(indent=2)
-    return _final_ai_text(state) or "Planner returned no output."
+        if not run.output:
+            return f"{agent_name} returned no output."
+        out = run.output[0]
+        if getattr(out, "parts", None):
+            return "\n".join(str(p.content) for p in out.parts if getattr(p, "content", None))
+        return str(out)
 
 
 @tool
-def research(request: str) -> str:
-    """Execute research following the given plan/request using the Research Agent."""
-    state = _stream_agent(researcher_agent, request)
-    return _final_ai_text(state) or "Research returned no output."
+async def delegate_to_planner(request: str) -> str:
+    """Decompose the user research request into a structured ResearchPlan via the Planner Agent (ACP)."""
+    return await _acp_call("planner", request)
 
 
 @tool
-def critique(findings: str) -> str:
-    """Evaluate the research findings using the Critic Agent. Returns structured CritiqueResult."""
-    state = _stream_agent(critic_agent, findings)
-    structured = state.get("structured_response")
-    if structured is not None:
-        return structured.model_dump_json(indent=2)
-    return _final_ai_text(state) or "Critic returned no output."
+async def delegate_to_researcher(plan: str) -> str:
+    """Execute research following the given plan via the Researcher Agent (ACP)."""
+    return await _acp_call("researcher", plan)
 
 
-# ── Supervisor agent ──────────────────────────────────────────────────────────
+@tool
+async def delegate_to_critic(findings: str) -> str:
+    """Evaluate research findings via the Critic Agent (ACP). Returns structured CritiqueResult."""
+    return await _acp_call("critic", findings)
+
+
+# ── save_report tool (delegates to ReportMCP) ─────────────────────────────────
+
+class SaveReportInput(BaseModel):
+    filename: str = Field(description="Filename for the report, e.g. 'rag_comparison.md'")
+    content: str = Field(description="Full Markdown content of the report")
+
+
+@tool("save_report", args_schema=SaveReportInput)
+async def save_report(filename: str, content: str) -> str:
+    """Save the research report to disk via ReportMCP. HITL-protected by the Supervisor middleware."""
+    async with fastmcp.Client(REPORT_MCP_URL) as mcp_client:
+        result = await mcp_client.call_tool(
+            "save_report", {"filename": filename, "content": content}
+        )
+        if result.content:
+            return result.content[0].text
+        return "Report saved."
+
+
+# ── Supervisor with HumanInTheLoopMiddleware ──────────────────────────────────
 
 def build_supervisor():
     llm = ChatAnthropic(
@@ -107,10 +72,18 @@ def build_supervisor():
         api_key=settings.api_key.get_secret_value(),
         max_tokens=8192,
     )
-    return create_react_agent(
+    hitl = HumanInTheLoopMiddleware(
+        interrupt_on={
+            "save_report": {
+                "allowed_decisions": ["approve", "edit", "reject"],
+            }
+        }
+    )
+    return create_agent(
         model=llm,
-        tools=[plan, research, critique, save_report],
-        prompt=SUPERVISOR_PROMPT,
+        tools=[delegate_to_planner, delegate_to_researcher, delegate_to_critic, save_report],
+        system_prompt=SUPERVISOR_PROMPT,
+        middleware=[hitl],
         checkpointer=InMemorySaver(),
     )
 

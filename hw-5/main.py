@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 
@@ -6,7 +7,6 @@ from langgraph.types import Command
 
 from supervisor import supervisor
 
-# Tracks how many times research/critique were called (for round labels)
 _research_round = 0
 _critique_round = 0
 
@@ -23,7 +23,6 @@ def _extract_text(content) -> str:
 
 
 def _pretty_json(raw: str, model_name: str) -> str:
-    """Try to parse JSON and return a pretty model-like representation."""
     try:
         data = json.loads(raw)
         lines = [f"  📎 {model_name}("]
@@ -36,32 +35,27 @@ def _pretty_json(raw: str, model_name: str) -> str:
 
 
 def _print_supervisor_chunk(chunk: dict) -> None:
-    """Print a stream chunk from the Supervisor graph."""
     global _research_round, _critique_round
-
     for node_name, node_output in chunk.items():
         if node_name == "__interrupt__":
             continue
         messages = node_output.get("messages", []) if isinstance(node_output, dict) else []
-
         for msg in messages:
             if isinstance(msg, AIMessage):
                 if msg.tool_calls:
                     for tc in msg.tool_calls:
                         name = tc.get("name", "tool")
                         args = tc.get("args", {})
-                        # Section header
-                        if name == "plan":
-                            print(f"\n[Supervisor → Planner]")
-                        elif name == "research":
+                        if name == "delegate_to_planner":
+                            print("\n[Supervisor → Planner]")
+                        elif name == "delegate_to_researcher":
                             _research_round += 1
                             print(f"\n[Supervisor → Researcher]  (round {_research_round})")
-                        elif name == "critique":
+                        elif name == "delegate_to_critic":
                             _critique_round += 1
-                            print(f"\n[Supervisor → Critic]")
+                            print("\n[Supervisor → Critic]")
                         elif name == "save_report":
-                            print(f"\n[Supervisor → save_report]")
-                        # Tool call line
+                            print("\n[Supervisor → save_report]")
                         if name == "save_report":
                             fname = args.get("filename", "")
                             content_len = len(args.get("content", ""))
@@ -73,30 +67,55 @@ def _print_supervisor_chunk(chunk: dict) -> None:
                     text = _extract_text(msg.content)
                     if text.strip():
                         print(f"\nAgent: {text}")
-
             elif isinstance(msg, ToolMessage):
                 tool_name = getattr(msg, "name", "tool")
                 result = _extract_text(getattr(msg, "content", ""))
-                if tool_name == "plan":
+                if tool_name == "delegate_to_planner":
                     print(_pretty_json(result, "ResearchPlan"))
-                elif tool_name == "critique":
+                elif tool_name == "delegate_to_critic":
                     print(_pretty_json(result, "CritiqueResult"))
-                elif tool_name == "research":
-                    # Internal calls were already printed by supervisor.py streaming
+                elif tool_name == "delegate_to_researcher":
                     pass
                 elif tool_name == "save_report":
-                    # Result after resume — success or feedback message
                     if result.strip():
                         print(f"  📎 {result[:200]}")
                 else:
                     print(f"  📎 [{tool_name}] {result[:100]}")
 
 
-def _handle_interrupt(interrupt_value: dict, config: dict) -> None:
-    """Show proposed report and ask approve/edit/reject. Loops until resolved."""
-    filename = interrupt_value.get("filename", "report.md")
-    content = interrupt_value.get("content", "")
+def _parse_interrupt_payload(raw) -> tuple[str, str]:
+    """Extract filename/content from HumanInTheLoopMiddleware interrupt payload.
+    HITLRequest shape:
+    {
+        "action_requests": [{"name": "save_report", "args": {"filename": ..., "content": ...}}],
+        "review_configs": [...]
+    }
+    """
+    if isinstance(raw, dict):
+        action_requests = raw.get("action_requests", [])
+        if action_requests:
+            args = action_requests[0].get("args", {})
+            return args.get("filename", "report.md"), args.get("content", "")
+    return "report.md", ""
 
+
+async def _drain(stream) -> tuple[bool, object]:
+    """Consume stream until interrupt or end. Returns (interrupted, interrupt_value)."""
+    interrupted = False
+    interrupt_value = None
+    async for chunk in stream:
+        if "__interrupt__" in chunk:
+            interrupted = True
+            interrupts = chunk["__interrupt__"]
+            interrupt_value = interrupts[0].value if interrupts else None
+            break
+        _print_supervisor_chunk(chunk)
+    return interrupted, interrupt_value
+
+
+async def _handle_interrupt(interrupt_value, config: dict) -> None:
+    """Show proposed report and ask approve/edit/reject. Loops until resolved."""
+    filename, content = _parse_interrupt_payload(interrupt_value)
     while True:
         print("\n" + "=" * 60)
         print("⏸️  ACTION REQUIRES APPROVAL")
@@ -104,56 +123,37 @@ def _handle_interrupt(interrupt_value: dict, config: dict) -> None:
         print(f'    Tool:  save_report')
         print(f'    Args:  {{"filename": "{filename}", "content": "{content[:60]}..."}}')
         print("=" * 60)
-
         raw = input("\n  👉 approve / edit / reject: ").strip().lower()
 
         if raw == "approve":
-            for chunk in supervisor.stream(
-                Command(resume={"action": "approve"}),
-                config=config,
-                stream_mode="updates",
-            ):
-                if "__interrupt__" in chunk:
-                    continue
-                _print_supervisor_chunk(chunk)
+            resume_val = {"decisions": [{"type": "approve"}]}
+            interrupted, new_val = await _drain(supervisor.astream(
+                Command(resume=resume_val), config=config, stream_mode="updates"
+            ))
+            if interrupted and new_val:
+                filename, content = _parse_interrupt_payload(new_val)
+                continue
             print(f"\n  ✅ Approved! Report saved to output/{filename}")
             return
 
         elif raw == "edit":
             feedback = input("  ✏️  Your feedback: ").strip()
-            interrupted_again = False
-            new_interrupt_value = None
+            # Reject with feedback message → LLM sees the message and revises
+            resume_val = {"decisions": [{"type": "reject", "message": f"Please revise: {feedback}"}]}
             print("\n[Supervisor revises report based on feedback]")
-            for chunk in supervisor.stream(
-                Command(resume={"action": "edit", "feedback": feedback}),
-                config=config,
-                stream_mode="updates",
-            ):
-                if "__interrupt__" in chunk:
-                    interrupted_again = True
-                    interrupts = chunk["__interrupt__"]
-                    if interrupts:
-                        new_interrupt_value = interrupts[0].value
-                    break
-                _print_supervisor_chunk(chunk)
-
-            if interrupted_again and new_interrupt_value:
-                filename = new_interrupt_value.get("filename", filename)
-                content = new_interrupt_value.get("content", content)
-                interrupt_value = new_interrupt_value
-                # Loop continues → show HITL again
-            else:
-                return  # No new interrupt → done
+            interrupted, new_val = await _drain(supervisor.astream(
+                Command(resume=resume_val), config=config, stream_mode="updates"
+            ))
+            if interrupted and new_val:
+                filename, content = _parse_interrupt_payload(new_val)
+                continue
+            return
 
         elif raw == "reject":
-            for chunk in supervisor.stream(
-                Command(resume={"action": "reject"}),
-                config=config,
-                stream_mode="updates",
-            ):
-                if "__interrupt__" in chunk:
-                    continue
-                _print_supervisor_chunk(chunk)
+            resume_val = {"decisions": [{"type": "reject"}]}
+            await _drain(supervisor.astream(
+                Command(resume=resume_val), config=config, stream_mode="updates"
+            ))
             print("\n  ❌ Report rejected. Not saved.")
             return
 
@@ -161,7 +161,7 @@ def _handle_interrupt(interrupt_value: dict, config: dict) -> None:
             print("  Please type: approve, edit, or reject")
 
 
-def main():
+async def main():
     global _research_round, _critique_round
     print("Multi-Agent Research System (type 'exit' to quit)")
     print("-" * 50)
@@ -171,43 +171,29 @@ def main():
             user_input = input("\nYou: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
-            break
-
+            return
         if not user_input:
             continue
         if user_input.lower() in ("exit", "quit"):
             print("Goodbye!")
-            break
+            return
 
-        # New thread per request
         thread_id = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread_id}}
         _research_round = 0
         _critique_round = 0
 
         try:
-            interrupted = False
-            interrupt_value = None
-
-            for chunk in supervisor.stream(
+            interrupted, interrupt_value = await _drain(supervisor.astream(
                 {"messages": [("user", user_input)]},
                 config=config,
                 stream_mode="updates",
-            ):
-                if "__interrupt__" in chunk:
-                    interrupted = True
-                    interrupts = chunk["__interrupt__"]
-                    if interrupts:
-                        interrupt_value = interrupts[0].value
-                    break
-                _print_supervisor_chunk(chunk)
-
+            ))
             if interrupted and interrupt_value:
-                _handle_interrupt(interrupt_value, config)
-
+                await _handle_interrupt(interrupt_value, config)
         except KeyboardInterrupt:
             print("\n[interrupted]")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

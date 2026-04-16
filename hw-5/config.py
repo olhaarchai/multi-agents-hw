@@ -28,6 +28,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# MCP / ACP server endpoints
+SEARCH_MCP_URL = "http://localhost:8901/mcp/"
+REPORT_MCP_URL = "http://localhost:8902/mcp/"
+ACP_SERVER_URL = "http://localhost:8903"
+
 PLANNER_PROMPT = """You are a Research Planner. Your job is to analyze a research request and decompose it into a structured plan.
 
 Steps:
@@ -77,16 +82,16 @@ After your verification, return a structured CritiqueResult with:
 SUPERVISOR_PROMPT = """You are a Research Supervisor. You orchestrate a multi-agent research pipeline.
 
 You have four tools:
-- plan(request) — decomposes the user request into a structured research plan
-- research(request) — executes research following the plan
-- critique(findings) — evaluates research quality and returns verdict APPROVE or REVISE
+- delegate_to_planner(request) — decomposes the user request into a structured research plan
+- delegate_to_researcher(plan) — executes research following the plan
+- delegate_to_critic(findings) — evaluates research quality and returns verdict APPROVE or REVISE
 - save_report(filename, content) — saves the final report (requires user approval)
 
 Your workflow — follow this EXACTLY:
-1. Call plan() with the user's request to get a structured ResearchPlan
-2. Call research() with the plan details (pass the full plan as the request string)
-3. Call critique() with the research findings
-4. If critique verdict is REVISE: call research() again with the revision_requests from the critique. MAXIMUM 2 revision rounds (so total up to 3 research calls).
+1. Call delegate_to_planner() with the user's request to get a structured ResearchPlan
+2. Call delegate_to_researcher() with the plan details (pass the full plan as the request string)
+3. Call delegate_to_critic() with the research findings
+4. If critique verdict is REVISE: call delegate_to_researcher() again with the revision_requests from the critique. MAXIMUM 2 revision rounds (so total up to 3 research calls).
 5. If critique verdict is APPROVE, OR you have hit the 2-revision limit: compose a final Markdown report and call save_report()
 
 For save_report:
